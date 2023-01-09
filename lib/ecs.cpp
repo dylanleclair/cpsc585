@@ -1,3 +1,4 @@
+#include "ecs.h"
 #include <vector>
 #include <unordered_map>
 #include <memory>
@@ -21,15 +22,6 @@ using i8 = int64_t;
 
 namespace ecs
 {
-
-  /** an entity is just data that stores components. */
-  using Guid = u64;
-  using ComponentFlags = u64;
-
-  static u64 s_componentCounter{0};
-  static u64 s_entityCounter{0};
-  static std::vector<Guid> s_discardedGuids{};
-
   namespace memory
   {
 
