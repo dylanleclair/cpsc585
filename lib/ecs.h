@@ -16,19 +16,13 @@ using i64 = int64_t;
 using i32 = int64_t;
 using i16 = int64_t;
 using i8 = int64_t;
-
+/** an entity is just data that stores components. */
+using Guid = u64;
+using ComponentFlags = u64;
 // we need some way of tracking which components are assigned to an entity. we could perhaps reflect on the entity's components, and hash the types?
 
 namespace ecs
 {
-
-  /** an entity is just data that stores components. */
-  using Guid = u64;
-  using ComponentFlags = u64;
-
-  static u64 s_componentCounter{0};
-  static u64 s_entityCounter{0};
-  static std::vector<Guid> s_discardedGuids{};
 
   namespace memory
   {
@@ -43,7 +37,9 @@ namespace ecs
     template <typename T>
     class ComponentPool : public IComponentPool
     {
+
     public:
+
       void push_back(Guid entityGuid, T component)
       {
         // TODO add a guard clause to prevent duplicate components
@@ -86,7 +82,7 @@ namespace ecs
         // add guard clause
         for (auto &pair : m_mappings)
         {
-          if (pair.first == guid)
+          if (pair.first == entityGuid)
           {
             return m_components[pair.second];
           }
@@ -94,87 +90,123 @@ namespace ecs
       }
 
     private:
-      std::vector<T> m_components;                       // we're *supposed* to use an array here, but a vector will do.
-      std::vector<std::pair<Guid, size_t>> m_mappings{}; // helps us access components even if others are removed.
+      std::vector<T> m_components = std::vector<T>{};                       // we're *supposed* to use an array here, but a vector will do.
+      std::vector<std::pair<Guid, size_t>> m_mappings = std::vector<std::pair<Guid, size_t>>{}; // helps us access components even if others are removed. component guid -> index in pool
     };
   }
 
-  // lookup table of component GUIDs
-  static std::unordered_map<std::string, Guid> s_componentGuids{};
-
-  static std::unordered_map<std::string, std::shared_ptr<memory::IComponentPool>> s_componentPools;
-
-  template <typename T>
-  Guid GetComponentGuid()
+  struct EntityComponentSystem
   {
+    u64 m_componentCounter{0};
+    u64 m_entityCounter{0};
+    std::vector<Guid> m_discardedGuids = std::vector<Guid>{};
 
-    // lookup the typename
-    std::string typeName = std::string{typeid(T).name()};
-
-    // see if a Guid already exists for this type of component
-    if (auto typeLookup = s_componentGuids.find(typeName); typeLookup != s_componentGuids.end())
-    { // if the type is already found, return it.
-      return typeLookup->second;
-    }
-
-    // if not yet created, add the new component Guid to the lookup table.
-    Guid componentGuid = s_componentCounter++;
-    s_componentGuids[typeName] = componentGuid;
-    s_componentPools[typeName] = std::make_shared<memory::ComponentPool<T>>();
-
-    // TODO make this more robust -> what if we no longer need a particular type of component? make some sort of wrapper that will reuse fully discarded guids
-
-    return componentGuid;
-  }
+    // lookup table of component GUIDs
+    std::unordered_map<std::string, Guid> m_componentGuids{};
+    std::unordered_map<std::string, std::shared_ptr<memory::IComponentPool>> m_componentPools{};
+  };
 
   struct Entity
   {
 
-    Entity(Guid guid, ComponentFlags components, Scene &scene)
+    Entity(Guid guid, ComponentFlags components) : id(guid), components(components)
     {
-      this->id = guid;
-      this->components = components;
-      this->scene = scene;
     }
-
     Guid id;
     ComponentFlags components;
-    Scene &scene;
+  };
+
+  struct Scene
+  {
+
+    Scene() : ecs(EntityComponentSystem{}), entities(std::vector<Entity>{}) {}
+
+    /* --------------------------------------
+
+     ENTITY MANAGEMENT
+
+    -------------------------------------- */
+
+    Entity &CreateEntity()
+    {
+
+      // first we need to see if there are any discarded guids from destroyed entities
+      if (ecs.m_discardedGuids.size() == 0)
+      {
+        // assign a completely new guid
+        Guid entityId = ecs.m_entityCounter++;
+        entities.push_back(Entity{entityId, 0});
+        return entities[entities.size() - 1];
+      }
+      else
+      {
+        // take the most recently discarded guid, return it.
+        Guid assignedGuid = ecs.m_discardedGuids.back();
+        ecs.m_discardedGuids.pop_back();
+        entities[assignedGuid].components = 0;
+        return entities[assignedGuid];
+      }
+    }
+
+    void DestroyEntity(Guid entityGuid)
+    {
+      ecs.m_discardedGuids.push_back(entityGuid);
+      entities[entityGuid].components = 0; // reset the component flags to 0 (empty it)
+    }
+
+    bool isValidEntity(Guid entityGuid)
+    {
+      for (const auto &guid : ecs.m_discardedGuids)
+      {
+        if (entityGuid == guid)
+        {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    /* --------------------------------------
+
+     COMPONENT MANAGEMENT
+
+    -------------------------------------- */
 
     template <typename T>
-    T &AddComponent(T component)
+    void RegisterComponent()
+    {
+
+        std::string typeName = std::string{ typeid(T).name() };
+        if (ecs.m_componentPools[typeName] == nullptr)
+        {
+            Guid componentGuid = GetComponentGuid<T>();
+            ecs.m_componentPools.insert({ typeName, std::make_shared<memory::ComponentPool<T>>() });
+        }
+
+
+    }
+
+
+    template <typename T>
+    T &AddComponent(Guid entityGuid, T component)
     {
       // essentially sets a flag telling the engine to
       // update the component with the corresponding system
       // next frame.
 
       std::string typeName = std::string{typeid(T).name()};
-      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(s_componentPools[typeName]);
-      componentPool->push_back(id, component);
+      RegisterComponent<T>(); // attempt to register component
+      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(ecs.m_componentPools[typeName]);
+      
+
+
+      // when push_back is called, the componentPool[typeName] is an empty vector -> 
+
+      componentPool->push_back(entityGuid, component);
 
       Guid componentGuid = GetComponentGuid<T>();
 
-      scene.entities[id].components |= 1 << componentGuid; // mask the bit!
-
-      T &componentData = componentPool->GetComponentData(id);
-      // CONSIDER RETURNING THE COMPONENT
-      return componentData;
-    }
-
-    template <typename T>
-    static T &AddComponent(Scene &scene, Guid entityGuid, T component)
-    {
-      // essentially sets a flag telling the engine to
-      // update the component with the corresponding system
-      // next frame.
-
-      std::string typeName = std::string{typeid(T).name()};
-      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(s_componentPools[typeName]);
-      componentPool->push_back(entityGuid, component);
-
-      ecs::Guid componentGuid = GetComponentGuid<T>();
-
-      scene.entities[entityGuid].components |= 1 << componentGuid; // mask the bit!
+      entities[entityGuid].components |= (static_cast<u64>(1) << componentGuid); // mask the bit!
 
       T &componentData = componentPool->GetComponentData(entityGuid);
       // CONSIDER RETURNING THE COMPONENT
@@ -185,94 +217,81 @@ namespace ecs
     void RemoveComponent(Guid entityGuid)
     {
       std::string typeName = std::string{typeid(T).name()};
-      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(s_componentPools[typeName]);
+      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(ecs.m_componentPools[typeName]);
       componentPool->remove(entityGuid);
 
       int componentId = GetComponentGuid<T>();
-      scene.entities[guid] &= (~(1 << componentId));
+      entities[entityGuid] &= (~(static_cast<u64>(1) << componentId));
     }
 
     template <typename T>
     T &GetComponent(Guid entityGuid)
     {
       std::string typeName = std::string{typeid(T).name()};
-      memory::ComponentPool<T> *componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(s_componentPools[typeName]);
-      componentPool->GetComponentData(entityGuid);
+      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(ecs.m_componentPools[typeName]);
+      return componentPool->GetComponentData(entityGuid);
     }
-  };
 
-  struct Scene
-  {
+    template <typename T>
+    Guid GetComponentGuid()
+    {
+
+      // lookup the typename
+      std::string typeName = std::string{typeid(T).name()};
+
+      // see if a Guid already exists for this type of component
+      if (auto typeLookup = ecs.m_componentGuids.find(typeName); typeLookup != ecs.m_componentGuids.end())
+      { // if the type is already found, return it.
+        return typeLookup->second;
+      }
+
+      // if not yet created, add the new component Guid to the lookup table.
+      Guid componentGuid = ecs.m_componentCounter++;
+      ecs.m_componentGuids[typeName] = componentGuid;
+      ecs.m_componentPools[typeName] = std::make_shared<memory::ComponentPool<T>>();
+
+      // TODO make this more robust -> what if we no longer need a particular type of component? make some sort of wrapper that will reuse fully discarded guids
+
+      return componentGuid;
+    }
+
     std::vector<Entity> entities; // basically a list of component masks and names
-
-    Entity CreateEntity()
-    {
-
-      // first we need to see if there are any discarded guids from destroyed entities
-      if (s_discardedGuids.size() != 0)
-      {
-        // assign a completely new guid
-        Guid entityId = s_entityCounter++;
-        entities.push_back(Entity{entityId, 0, *this});
-        return entities[entities.size() - 1];
-      }
-      else
-      {
-        // take the most recently discarded guid, return it.
-        Guid assignedGuid = s_discardedGuids.back();
-        s_discardedGuids.pop_back();
-        entities[assignedGuid].components = 0;
-        return entities[assignedGuid];
-      }
-    }
-
-    void DestroyEntity(Guid entityGuid)
-    {
-      s_discardedGuids.push_back(entityGuid);
-      entities[entityGuid].components = 0; // reset the component flags to 0 (empty it)
-    }
-
-    bool isValidEntity(Guid entityGuid)
-    {
-      for (const auto &guid : s_discardedGuids)
-      {
-        if (entityGuid == guid)
-        {
-          return false;
-        }
-      }
-      return true;
-    }
+  private:
+    // Member variables
+    EntityComponentSystem ecs;
   };
 
   template <typename... ComponentTypes>
   struct EntitiesInScene
   {
-    EntitiesInScene(Scene &scene) : m_scene(&scene)
+    EntitiesInScene(Scene &scene) : m_scene(scene)
     {
-      if (sizeof(ComponentTypes) == 0)
+      if (sizeof...(ComponentTypes) == 0)
       {
-        all = true;
+        m_all = true;
       }
       else
       {
-        Guid[] componentIds = {0, GetComponentGuid<ComponentTypes>()...};
+        Guid componentIds[] = {0, scene.GetComponentGuid<ComponentTypes>()...};
         for (const auto &id : componentIds)
         {
-          ComponentFlags |= id; // all we have to do is or it in~!
+            m_componentMask |= (static_cast<ComponentFlags>(1) << id); // all we have to do is or it in~!
         }
       }
     }
 
     struct Iterator
     {
-      Iterator(EntitiesInScene &entitiesInScene) : m_entities(entitiesInScene) {}
+        // need to properly debug whatever is up with this!
+        // also need to fix whatever issue is causing proper components to be made for each entity.
 
-      Iterator(EntitiesInScene &entitiesInScene, Guid index) : m_entities(entitiesInScene), index(index) {}
+      Iterator(EntitiesInScene &entitiesInScene) : m_scene(entitiesInScene.m_scene), m_componentMask(entitiesInScene.m_componentMask), m_all(entitiesInScene.m_all) {}
+
+      Iterator(EntitiesInScene &entitiesInScene, Guid index) : m_scene(entitiesInScene.m_scene), m_componentMask(entitiesInScene.m_componentMask), m_all(entitiesInScene.m_all), index(index) {}
 
       Guid operator*() const
       {
-        m_entities.m_scene.entities[index].id;
+        return m_scene.entities[index].id;
       };
 
       bool operator==(const Iterator &other) const
@@ -284,11 +303,11 @@ namespace ecs
         return index != other.index && index != m_scene.entities.size();
       }
 
-      void isValidIndex()
+      bool isValidIndex()
       {
-        Guid e = m_scene.entities[index].;
+        Guid e = m_scene.entities[index].id;
         if (m_scene.isValidEntity(e))
-          return (m_entities.m_all) ? true : m_componentMask == m_scene.entities[index].components;
+          return (m_all) ? true : m_componentMask == m_scene.entities[index].components;
         else
         {
           return false;
@@ -300,12 +319,13 @@ namespace ecs
         do
         {
           index++;
-        } while (index < m_scene.entities.size() && !isValidIndex()) // advances index until next element with the right components is found
+        } while (index < m_scene.entities.size() && !isValidIndex()); // advances index until next element with the right components is found
+        return *this;
       }
 
       const Iterator begin() const
       {
-        int firstIndex = 0;
+        u64 firstIndex = 0;
 
         ComponentFlags entityComponentsMasked = (m_componentMask & m_scene.entities[index].components);
 
@@ -319,7 +339,7 @@ namespace ecs
 
       const Iterator end() const
       {
-        int firstIndex = m_scene.entities.size() - 1;
+        u64 firstIndex = m_scene.entities.size() - 1;
 
         ComponentFlags entityComponentsMasked = (m_componentMask & m_scene.entities[index].components);
 
@@ -330,11 +350,15 @@ namespace ecs
 
         return Iterator{EntitiesInScene{m_scene}, firstIndex};
       }
-
-      EntitiesInScene &m_entities;
+      bool m_all;
+      ComponentFlags m_componentMask;
+      Scene& m_scene;
       Guid index{0};
     };
 
+
+    Iterator begin() { return Iterator(*this).begin(); }
+    Iterator end() { return Iterator(*this).end(); }
     Scene &m_scene;
     ComponentFlags m_componentMask{0};
     bool m_all{false};
