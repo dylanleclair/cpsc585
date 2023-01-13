@@ -1,4 +1,6 @@
 #pragma once
+
+#include "int_types.h"
 #include <vector>
 #include <unordered_map>
 #include <memory>
@@ -8,15 +10,7 @@
 // - https://austinmorlan.com/posts/entity_component_system/#the-component-manager
 // there was few holes in each of them that I patched up, taking the parts I liked of each.
 
-using u64 = uint64_t;
-using u32 = uint64_t;
-using u16 = uint64_t;
-using u8 = uint64_t;
 
-using i64 = int64_t;
-using i32 = int64_t;
-using i16 = int64_t;
-using i8 = int64_t;
 /** an entity is just data that stores components. */
 using Guid = u64;
 using ComponentFlags = u64;
@@ -24,6 +18,23 @@ using ComponentFlags = u64;
 
 namespace ecs
 {
+
+  struct Scene;
+  struct Entity;
+
+  /// @brief systems interface proof of concept
+  struct ISystem
+  {
+    virtual void Update(Scene &scene, float deltaTime) = 0;
+  };
+  
+  /// @brief Gets the mask for the component by shifting according to the provided GUID.
+  /// @param componentGuid 
+  /// @return ComponentFlags with only this component enabled
+  ComponentFlags componentMaskFromGuid(Guid componentGuid)
+  {
+    return (static_cast<u64>(1) << componentGuid);
+  }
 
   namespace memory
   {
@@ -109,11 +120,8 @@ namespace ecs
 
   struct Entity
   {
-
-    Entity(Guid guid, ComponentFlags components) : id(guid), components(components)
-    {
-    }
-    Guid id;
+    Entity(Guid guid, ComponentFlags components) :guid(guid), components(components) {}
+    Guid guid;
     ComponentFlags components;
   };
 
@@ -128,6 +136,9 @@ namespace ecs
 
     -------------------------------------- */
 
+    /**
+     * Creates an entity, returning a reference to the entity.
+     */
     Entity &CreateEntity()
     {
 
@@ -174,39 +185,21 @@ namespace ecs
     -------------------------------------- */
 
     template <typename T>
-    void RegisterComponent()
-    {
-
-        std::string typeName = std::string{ typeid(T).name() };
-        if (ecs.m_componentPools[typeName] == nullptr)
-        {
-            Guid componentGuid = GetComponentGuid<T>();
-            ecs.m_componentPools.insert({ typeName, std::make_shared<memory::ComponentPool<T>>() });
-        }
-
-
-    }
-
-
-    template <typename T>
     T &AddComponent(Guid entityGuid, T component)
     {
-      // essentially sets a flag telling the engine to
-      // update the component with the corresponding system
-      // next frame.
-
       std::string typeName = std::string{typeid(T).name()};
       RegisterComponent<T>(); // attempt to register component
+      Guid componentGuid = GetComponentGuid<T>();
+      ComponentFlags newComponentMask = componentMaskFromGuid(componentGuid);
+
+      Entity &entity = entities[entityGuid];
+
       std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(ecs.m_componentPools[typeName]);
-      
 
-
-      // when push_back is called, the componentPool[typeName] is an empty vector -> 
-
+      // add the component to memory pool reponsible for storing it.
       componentPool->push_back(entityGuid, component);
 
-      Guid componentGuid = GetComponentGuid<T>();
-
+      // update the entity's components.
       entities[entityGuid].components |= (static_cast<u64>(1) << componentGuid); // mask the bit!
 
       T &componentData = componentPool->GetComponentData(entityGuid);
@@ -222,7 +215,7 @@ namespace ecs
       componentPool->remove(entityGuid);
 
       int componentId = GetComponentGuid<T>();
-      entities[entityGuid].id &= (~(static_cast<u64>(1) << componentId));
+      entities[entityGuid].guid &= (~(static_cast<u64>(1) << componentId));
     }
 
     template <typename T>
@@ -236,7 +229,6 @@ namespace ecs
     template <typename T>
     Guid GetComponentGuid()
     {
-
       // lookup the typename
       std::string typeName = std::string{typeid(T).name()};
 
@@ -251,6 +243,7 @@ namespace ecs
       ecs.m_componentGuids[typeName] = componentGuid;
       ecs.m_componentPools[typeName] = std::make_shared<memory::ComponentPool<T>>();
 
+      assert(componentGuid < 63 && "Max number of components exceeded.");
       // TODO make this more robust -> what if we no longer need a particular type of component? make some sort of wrapper that will reuse fully discarded guids
 
       return componentGuid;
@@ -260,6 +253,24 @@ namespace ecs
   private:
     // Member variables
     EntityComponentSystem ecs;
+
+    /* --------------------------------------
+     Private helper functions
+    -------------------------------------- */
+
+    /// @brief Registers a component in the system.
+    /// @tparam T the new type of component to register in the system. max of 64 components.
+    template <typename T>
+    void RegisterComponent()
+    {
+      std::string typeName = std::string{typeid(T).name()};
+      if (ecs.m_componentPools[typeName] == nullptr)
+      {
+        Guid componentGuid = GetComponentGuid<T>();
+        ecs.m_componentPools.insert({typeName, std::make_shared<memory::ComponentPool<T>>()});
+      }
+    }
+
   };
 
   template <typename... ComponentTypes>
@@ -292,7 +303,7 @@ namespace ecs
 
       Guid operator*() const
       {
-        return m_scene.entities[index].id;
+        return m_scene.entities[index].guid;
       };
 
       bool operator==(const Iterator &other) const
@@ -306,7 +317,7 @@ namespace ecs
 
       bool isValidIndex()
       {
-        Guid e = m_scene.entities[index].id;
+        Guid e = m_scene.entities[index].guid;
         if (m_scene.isValidEntity(e))
           return (m_all) ? true : m_componentMask == m_scene.entities[index].components;
         else
@@ -330,7 +341,7 @@ namespace ecs
 
         ComponentFlags entityComponentsMasked = (m_componentMask & m_scene.entities[index].components);
 
-        while (index < m_scene.entities.size() && (m_componentMask != entityComponentsMasked || !m_scene.isValidEntity(m_scene.entities[index].id)))
+        while (index < m_scene.entities.size() && (m_componentMask != entityComponentsMasked || !m_scene.isValidEntity(m_scene.entities[index].guid)))
         {
           firstIndex++;
         }
@@ -344,7 +355,7 @@ namespace ecs
 
         ComponentFlags entityComponentsMasked = (m_componentMask & m_scene.entities[index].components);
 
-        while (index > 0 && (m_componentMask != entityComponentsMasked || !m_scene.isValidEntity(m_scene.entities[index].id)))
+        while (index > 0 && (m_componentMask != entityComponentsMasked || !m_scene.isValidEntity(m_scene.entities[index].guid)))
         {
           firstIndex--;
         }

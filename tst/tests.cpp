@@ -26,9 +26,12 @@ TEST(ecs, register_component_guids)
   Guid guid2 = scene.GetComponentGuid<DummyDataAlternate>();
   Guid guid3 = scene.GetComponentGuid<DummyData>();
 
+  // proper behavior is a unique integer per component type.
+
   ASSERT_TRUE(guid1 == 0);
   ASSERT_TRUE(guid2 == 1);
   ASSERT_TRUE(guid3 == 0);
+  
 }
 
 TEST(ecs, entities_in_scene)
@@ -40,7 +43,7 @@ TEST(ecs, entities_in_scene)
 
   ASSERT_TRUE(entity.components == 0); // no components yet
 
-  scene.AddComponent<Transform>(entity.id, Transform{0.0f, 0.0f, 0.0f});
+  scene.AddComponent<Transform>(entity.guid, Transform{0.0f, 0.0f, 0.0f});
 
   Guid componentGuid = scene.GetComponentGuid<Transform>();
   ComponentFlags componentMask = (static_cast<u64>(1) << componentGuid);
@@ -52,21 +55,31 @@ TEST(ecs, entities_in_scene)
   ASSERT_TRUE(entity.components == componentMask); // a component has been added!
 }
 
-// TEST(ecs, test_system_basic)
-// {
+TEST(ecs, entity_reuse)
+{
 
-//   ecs::Scene scene;
+  ecs::Scene scene;
 
-//   ecs::Scene::Entity entity = scene.CreateEntity();
+  ecs::Entity &entity = scene.CreateEntity();
 
-//   entity.AddComponent<Transform>(entity.id, Transform{0.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(entity.components == 0); // no components yet
 
-//   // tests
-//   ecs::Guid guid1 = ecs::GetComponentGuid<DummyData>();
-//   ecs::Guid guid2 = ecs::GetComponentGuid<DummyDataAlternate>();
-//   ecs::Guid guid3 = ecs::GetComponentGuid<DummyData>();
+  scene.AddComponent<Transform>(entity.guid, Transform{0.0f, 0.0f, 0.0f});
+  scene.DestroyEntity(entity.guid);
 
-//   ASSERT_TRUE(guid1 == 0);
-//   ASSERT_TRUE(guid2 == 1);
-//   ASSERT_TRUE(guid3 == 0);
-// }
+  // make sure component flags destroyed / reset so invalid components are not fetched
+  ASSERT_TRUE(entity.components == 0);
+
+  // create a new entity. this should reuse the guid of the destroyed entity.
+  entity = scene.CreateEntity();
+
+  ASSERT_TRUE(entity.components == 0);
+  ASSERT_TRUE(entity.guid == 0);
+
+  std::cout << "Expect entity GUID: " << 0 << std::endl;
+  std::cout << "Actual entity GUID: " << entity.guid << std::endl;
+
+  std::cout << "Expected component mask: " << 0 << std::endl;
+  std::cout << ">ACTUAL< component mask: " << entity.components << std::endl;
+
+}

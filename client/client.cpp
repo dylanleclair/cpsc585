@@ -1,5 +1,4 @@
 // # Copyright (c) Dylan Leclair
-#pragma once
 
 #include <iostream>
 #include <algorithm>
@@ -11,11 +10,8 @@
 #include "ecs.h"
 #include <random>
 
-
-
-
-#define SCREEN_WIDTH (1800)
-#define SCREEN_HEIGHT (1200)
+#define SCREEN_WIDTH (1280)
+#define SCREEN_HEIGHT (720)
 
 #define WINDOW_TITLE "ecs demo"
 #define CHESS_ASSETS ASSETS_PATH "chess/512h/"
@@ -29,19 +25,25 @@ struct SampleData {
     Color color;
 };
 
+struct PhysicsSystem : ecs::ISystem {
 
-void PhysicsSystem(ecs::Scene& scene, float deltaTime)
-{
-    for (Guid entityGuid : ecs::EntitiesInScene<Rectangle, SampleData> (scene))
+    virtual void Initialize() {}
+    virtual void Teardown() {}
+    virtual void Update(ecs::Scene &scene, float deltaTime)
     {
-        SampleData& t = scene.GetComponent<SampleData>(entityGuid);
-        Rectangle& r = scene.GetComponent<Rectangle>(entityGuid);
-        t.rotation += 8.0f;
-        r.y += 3.0f;
+        for (Guid entityGuid : ecs::EntitiesInScene<Rectangle, SampleData>(scene))
+        {
+            SampleData &t = scene.GetComponent<SampleData>(entityGuid);
+            Rectangle &r = scene.GetComponent<Rectangle>(entityGuid);
+            t.rotation += 8.0f;
+            r.y += 3.0f;
+        }
     }
-}
+};
 
-void Renderer(ecs::Scene& scene, float deltaTime)
+
+
+void RenderingSystem(ecs::Scene& scene, float deltaTime)
 {
     for (Guid entityGuid : ecs::EntitiesInScene<Rectangle, SampleData>(scene))
     {
@@ -56,6 +58,7 @@ void Renderer(ecs::Scene& scene, float deltaTime)
 
 int main(void)
 {
+    
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     // SetConfigFlags(FLAG_FULLSCREEN_MODE);
     //  Initialization
@@ -69,9 +72,9 @@ int main(void)
     int screenWidth{SCREEN_WIDTH};
     int screenHeight{SCREEN_HEIGHT};
 
+    PhysicsSystem physics{};
 
     ecs::Scene scene;
-
 
     std::default_random_engine generator;
     std::uniform_real_distribution<float> randPosition(0.0f, 1200.0f);
@@ -79,7 +82,7 @@ int main(void)
     std::uniform_real_distribution<float> randGravity(-10.0f, -1.0f);
     std::uniform_int_distribution<int> randColor(0,255);
 
-    for (int i = 0; i < 1000; i++)
+    for (int i = 0; i < 800; i++)
     {
 
         ecs::Entity& e = scene.CreateEntity();
@@ -90,8 +93,8 @@ int main(void)
 
         Color color = { static_cast<unsigned char>(randColor(generator)),static_cast<unsigned char>(randColor(generator)),static_cast<unsigned char>(randColor(generator)), 255};
        
-        scene.AddComponent(e.id, r);
-        scene.AddComponent(e.id, SampleData(r, rotation, color));
+        scene.AddComponent(e.guid, r);
+        scene.AddComponent(e.guid, SampleData(r, rotation, color));
     }
 
     std::cout << "scene initialized\n";
@@ -100,7 +103,6 @@ int main(void)
     // Main game loop
     while (!WindowShouldClose())
     {
-
         float deltaTime = GetFrameTime();
 
         BeginDrawing();
@@ -133,8 +135,8 @@ int main(void)
             }
         }
 
-        PhysicsSystem(scene, deltaTime);
-        Renderer(scene, deltaTime);
+        physics.Update(scene, deltaTime);
+        RenderingSystem(scene, deltaTime);
 
         // DrawTextEx(ttf, "Hello world!", Vector2{20.0f, 100.0f}, (float)ttf.baseSize, 2, LIME);
 
@@ -145,3 +147,38 @@ int main(void)
 
     return 0;
 }
+
+// float getDeltaTime() {};
+
+
+// #include "ecs.h"
+// int ecs_example()
+// {
+//     ecs::Scene scene;
+//     ecs::Entity &e = scene.CreateEntity();
+
+//     Rectangle rect{0.0f, 0.0f, 10.0f, 10.0f};
+
+//     // add a component -> type is interpreted by compiler
+//     scene.AddComponent(e.guid, rect);
+//     // explicit typing of component
+//     scene.AddComponent<Rectangle>(e.guid, rect);
+
+//     while (true)
+//     {
+//         RenderingSystem(scene,getDeltaTime());
+//     }
+// }
+
+// void RenderingSystem(ecs::Scene &scene, float deltaTime)
+// {
+//     // iterate over entities in scene by GUID, using component type to select components.
+//     // only entities with ALL of the specified components are selected.
+//     for (Guid entityGuid : ecs::EntitiesInScene<Rectangle, SampleData>(scene))
+//     {
+//         // get the component on the entity, using GUID to lookup.
+//         Rectangle &r = scene.GetComponent<Rectangle>(entityGuid);
+//         // sample function that will render the rectangle
+//         DrawRectangleRec(r, RED);
+//     }
+// }
