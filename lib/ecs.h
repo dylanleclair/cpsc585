@@ -1,3 +1,4 @@
+#pragma once
 #include <vector>
 #include <unordered_map>
 #include <memory>
@@ -221,7 +222,7 @@ namespace ecs
       componentPool->remove(entityGuid);
 
       int componentId = GetComponentGuid<T>();
-      entities[entityGuid] &= (~(static_cast<u64>(1) << componentId));
+      entities[entityGuid].id &= (~(static_cast<u64>(1) << componentId));
     }
 
     template <typename T>
@@ -285,9 +286,9 @@ namespace ecs
         // need to properly debug whatever is up with this!
         // also need to fix whatever issue is causing proper components to be made for each entity.
 
-      Iterator(EntitiesInScene &entitiesInScene) : m_scene(entitiesInScene.m_scene), m_componentMask(entitiesInScene.m_componentMask), m_all(entitiesInScene.m_all) {}
+      Iterator(EntitiesInScene &entitiesInScene) : m_wrapper(entitiesInScene), m_scene(entitiesInScene.m_scene), m_componentMask(entitiesInScene.m_componentMask), m_all(entitiesInScene.m_all) {}
 
-      Iterator(EntitiesInScene &entitiesInScene, Guid index) : m_scene(entitiesInScene.m_scene), m_componentMask(entitiesInScene.m_componentMask), m_all(entitiesInScene.m_all), index(index) {}
+      Iterator(EntitiesInScene &entitiesInScene, size_t index) : m_wrapper(entitiesInScene),  m_scene(entitiesInScene.m_scene), m_componentMask(entitiesInScene.m_componentMask), m_all(entitiesInScene.m_all), index(index) {}
 
       Guid operator*() const
       {
@@ -334,7 +335,7 @@ namespace ecs
           firstIndex++;
         }
 
-        return Iterator{EntitiesInScene{m_scene}, firstIndex};
+        return Iterator{m_wrapper, firstIndex};
       }
 
       const Iterator end() const
@@ -348,12 +349,13 @@ namespace ecs
           firstIndex--;
         }
 
-        return Iterator{EntitiesInScene{m_scene}, firstIndex};
+        return Iterator{m_wrapper, firstIndex};
       }
       bool m_all;
       ComponentFlags m_componentMask;
       Scene& m_scene;
-      Guid index{0};
+      size_t index{0};
+      EntitiesInScene& m_wrapper;
     };
 
 

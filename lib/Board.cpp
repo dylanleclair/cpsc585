@@ -1,6 +1,4 @@
 // # Copyright (c) Dylan Leclair
-#pragma once
-
 #include "Board.h"
 #include "PlayerColor.h"
 #include "Move.h"

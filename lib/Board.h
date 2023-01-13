@@ -20,7 +20,7 @@ struct Selection
 class Board
 {
 public:
-    PlayerColor Board::getColor(int row, int col);
+    PlayerColor getColor(int row, int col);
     const std::vector<Move> &getValidMoves() const { return m_availableMoves; }
     void setValidMoves(std::pair<int, int> position);
     const PlayerColor getPlayerToMove() const;
