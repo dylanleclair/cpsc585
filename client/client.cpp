@@ -16,8 +16,10 @@
 #define WINDOW_TITLE "ecs demo"
 #define CHESS_ASSETS ASSETS_PATH "chess/512h/"
 
+const uint64_t NUM_ENTITIES = 50000;
 struct SampleData {
 
+    SampleData() : origin({5.0f,5.0f}), color(RED), rotation(0.0f) {}
     SampleData(Rectangle r, float rotation, Color color) : origin({ r.x + (r.width / 2), r.y + (r.height / 2) }), rotation(rotation), color(color) {};
 
     float rotation;
@@ -35,8 +37,8 @@ struct PhysicsSystem : ecs::ISystem {
         {
             SampleData &t = scene.GetComponent<SampleData>(entityGuid);
             Rectangle &r = scene.GetComponent<Rectangle>(entityGuid);
-            t.rotation += 8.0f;
             r.y += 3.0f;
+            t.rotation += 8.0f;
         }
     }
 };
@@ -49,15 +51,43 @@ void RenderingSystem(ecs::Scene& scene, float deltaTime)
     {
         SampleData& t = scene.GetComponent<SampleData>(entityGuid);
         Rectangle& r = scene.GetComponent<Rectangle>(entityGuid);
-
         Vector2 origin = Vector2{ 5.0f,5.0f };
 
         DrawRectanglePro(r, origin, t.rotation, t.color);
     }
 }
 
+struct TestItem
+{
+    Rectangle rect;
+    SampleData sd;
+};
+
+void updateItems(std::vector<TestItem> &items)
+{
+    for (auto &item : items)
+    {
+        SampleData &t = item.sd;
+        Rectangle &r = item.rect;
+
+        // t.rotation += 8.0f;
+        // r.y += 3.0f;
+
+        item.sd.rotation += 8.0f;
+        item.rect.y += 3.0f;
+
+        Vector2 origin = Vector2{5.0f, 5.0f};
+
+        DrawRectanglePro(r, origin, t.rotation, t.color);
+    }
+}
+
+
+
 int main(void)
 {
+
+    std::vector<TestItem> objects{};
     
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     // SetConfigFlags(FLAG_FULLSCREEN_MODE);
@@ -82,10 +112,10 @@ int main(void)
     std::uniform_real_distribution<float> randGravity(-10.0f, -1.0f);
     std::uniform_int_distribution<int> randColor(0,255);
 
-    for (int i = 0; i < 800; i++)
+    for (int i = 0; i < NUM_ENTITIES; i++)
     {
 
-        ecs::Entity& e = scene.CreateEntity();
+        ecs::Entity e = scene.CreateEntity();
 
         Rectangle r{ randPosition(generator), randPosition(generator), 10.0f, 10.0f};
 
@@ -95,9 +125,12 @@ int main(void)
        
         scene.AddComponent(e.guid, r);
         scene.AddComponent(e.guid, SampleData(r, rotation, color));
+
+        objects.push_back({r, SampleData(r, rotation, color)});
     }
 
     std::cout << "scene initialized\n";
+    std::cout << "displaying " << NUM_ENTITIES << "entities.\n";
 
     //--------------------------------------------------------------------------------------
     // Main game loop
@@ -137,6 +170,8 @@ int main(void)
 
         physics.Update(scene, deltaTime);
         RenderingSystem(scene, deltaTime);
+
+        // updateItems(objects);
 
         // DrawTextEx(ttf, "Hello world!", Vector2{20.0f, 100.0f}, (float)ttf.baseSize, 2, LIME);
 

@@ -2,6 +2,7 @@
 
 #include "int_types.h"
 #include <vector>
+#include <array>
 #include <unordered_map>
 #include <memory>
 
@@ -9,7 +10,6 @@
 // - https://www.david-colson.com/2020/02/09/making-a-simple-ecs.html
 // - https://austinmorlan.com/posts/entity_component_system/#the-component-manager
 // there was few holes in each of them that I patched up, taking the parts I liked of each.
-
 
 /** an entity is just data that stores components. */
 using Guid = u64;
@@ -19,6 +19,10 @@ using ComponentFlags = u64;
 namespace ecs
 {
 
+  const u32 MAX_ENTITIES = 50000;
+
+  template <typename... ComponentTypes>
+  struct EntitiesInScene;
   struct Scene;
   struct Entity;
 
@@ -27,7 +31,7 @@ namespace ecs
   {
     virtual void Update(Scene &scene, float deltaTime) = 0;
   };
-  
+
   /// @brief Gets the mask for the component by shifting according to the provided GUID.
   /// @param componentGuid 
   /// @return ComponentFlags with only this component enabled
@@ -54,56 +58,45 @@ namespace ecs
 
       void push_back(Guid entityGuid, T component)
       {
-        // TODO add a guard clause to prevent duplicate components
-        size_t componentIndex = m_components.size();
-        m_components.push_back(component);
-        m_mappings.push_back({entityGuid, componentIndex}); // add the mapping to our lookup table for them
+        size_t componentIndex = m_size;
+        m_components[componentIndex] = component;
+        m_mappings[entityGuid] = componentIndex; // add the mapping to our lookup table for them
+        m_size++;
       }
 
       void remove(Guid entityGuid)
       {
 
-        // TODO add a guard clause
+        // GOAL: copy last element into deleted elements position
 
-        // copy end element into the deleted element's position.
-        size_t i{std::numeric_limits<size_t>::max()};
-        for (auto const &pair : m_mappings)
-        {
-          if (pair.first == entityGuid)
-          {
-            i = pair.second;
-          }
-        }
+        // mappings[i] is the component index of entity guid i
 
-        if (i == std::numeric_limits<size_t>::max())
-        {
-          size_t lastIndex = m_components.size() - 1;
+        // first, we need to find the element to remove.
 
-          // if the index is valid...
-          // copy the element at end of vector to new position
-          m_components[i] = m_components[lastIndex];
-          // and remove the one that was copied over!
-          m_components.pop_back();
-        }
+        size_t removeIndex = m_mappings[entityGuid];
+        size_t lastIndex = m_size - 1;
 
-        // update map to point to moved spot
+        // copy data from the end of array to newly "freed" location
+        m_components[removeIndex] = m_components[lastIndex];
+
+        // update the mapping so data is still coherent
+        m_mappings[lastIndex] = removeIndex;
+
+        m_size--;
+
       }
 
       T &GetComponentData(Guid entityGuid)
       {
-        // add guard clause
-        for (auto &pair : m_mappings)
-        {
-          if (pair.first == entityGuid)
-          {
-            return m_components[pair.second];
-          }
-        }
+        // TODO: add guard clause
+        return m_components[m_mappings[entityGuid]];
       }
 
     private:
-      std::vector<T> m_components = std::vector<T>{};                       // we're *supposed* to use an array here, but a vector will do.
-      std::vector<std::pair<Guid, size_t>> m_mappings = std::vector<std::pair<Guid, size_t>>{}; // helps us access components even if others are removed. component guid -> index in pool
+      // std::vector<T> m_components = std::vector<T>{};                       // we're *supposed* to use an array here, but a vector will do.
+      size_t m_size{0};
+      std::array<T,MAX_ENTITIES> m_components;
+      std::array<size_t, MAX_ENTITIES> m_mappings; // helps us access components even if others are removed. component guid -> index in pool
     };
   }
 
@@ -115,18 +108,29 @@ namespace ecs
 
     // lookup table of component GUIDs
     std::unordered_map<std::string, Guid> m_componentGuids{};
-    std::unordered_map<std::string, std::shared_ptr<memory::IComponentPool>> m_componentPools{};
+    // std::unordered_map<std::string, std::shared_ptr<memory::IComponentPool>> m_componentPools{};
+
+    std::vector<std::shared_ptr<memory::IComponentPool>> m_componentPools{};
   };
 
   struct Entity
   {
-    Entity(Guid guid, ComponentFlags components) :guid(guid), components(components) {}
+    friend struct Scene;
+    template <typename... ComponentTypes>
+    friend struct EntitiesInScene;
+
     Guid guid;
+    Entity(Guid guid, ComponentFlags components) : guid(guid), components(components) {}
+  private:
     ComponentFlags components;
   };
 
+  /// @brief The primary data structure of the ECS. Manages entities, components, and their interactions.
   struct Scene
   {
+
+    template <typename... ComponentTypes>
+    friend struct EntitiesInScene;
 
     Scene() : ecs(EntityComponentSystem{}), entities(std::vector<Entity>{}) {}
 
@@ -139,7 +143,7 @@ namespace ecs
     /**
      * Creates an entity, returning a reference to the entity.
      */
-    Entity &CreateEntity()
+    Entity CreateEntity()
     {
 
       // first we need to see if there are any discarded guids from destroyed entities
@@ -148,7 +152,7 @@ namespace ecs
         // assign a completely new guid
         Guid entityId = ecs.m_entityCounter++;
         entities.push_back(Entity{entityId, 0});
-        return entities[entities.size() - 1];
+        return entities[entityId];
       }
       else
       {
@@ -164,6 +168,9 @@ namespace ecs
     {
       ecs.m_discardedGuids.push_back(entityGuid);
       entities[entityGuid].components = 0; // reset the component flags to 0 (empty it)
+
+      // we want to keep the array packed
+
     }
 
     bool isValidEntity(Guid entityGuid)
@@ -184,17 +191,21 @@ namespace ecs
 
     -------------------------------------- */
 
+    /// @brief Add the provided component to the entity with provided GUID.
+    /// @tparam T the type of component to add
+    /// @param entityGuid the entity guid to add a component to
+    /// @param component the component data to initialize the entity with
+    /// @return a reference to the component data in ECS memory
     template <typename T>
     T &AddComponent(Guid entityGuid, T component)
     {
       std::string typeName = std::string{typeid(T).name()};
-      RegisterComponent<T>(); // attempt to register component
       Guid componentGuid = GetComponentGuid<T>();
       ComponentFlags newComponentMask = componentMaskFromGuid(componentGuid);
 
       Entity &entity = entities[entityGuid];
 
-      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(ecs.m_componentPools[typeName]);
+      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(ecs.m_componentPools[componentGuid]);
 
       // add the component to memory pool reponsible for storing it.
       componentPool->push_back(entityGuid, component);
@@ -207,25 +218,55 @@ namespace ecs
       return componentData;
     }
 
+    /// @brief Removes a component from the specified entity
+    /// @tparam T the type of the component
+    /// @param entityGuid the guid of the entity to remove data from
     template <typename T>
     void RemoveComponent(Guid entityGuid)
     {
       std::string typeName = std::string{typeid(T).name()};
-      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(ecs.m_componentPools[typeName]);
+      u64 componentId = GetComponentGuid<T>();
+      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(ecs.m_componentPools[componentId]);
       componentPool->remove(entityGuid);
 
-      int componentId = GetComponentGuid<T>();
-      entities[entityGuid].guid &= (~(static_cast<u64>(1) << componentId));
+      Entity e = entities[entityGuid];
+
+      u64 mask = (~(static_cast<u64>(1) << componentId));
+
+      entities[entityGuid].components &= (~(static_cast<u64>(1) << componentId));
     }
 
+    /// @brief Gets a component specified by template on an entity.
+    /// @tparam T the desired component type
+    /// @param entityGuid 
+    /// @return 
     template <typename T>
     T &GetComponent(Guid entityGuid)
     {
       std::string typeName = std::string{typeid(T).name()};
-      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(ecs.m_componentPools[typeName]);
+      Guid componentGuid = GetComponentGuid<T>();
+      std::shared_ptr<memory::ComponentPool<T>> componentPool = std::static_pointer_cast<memory::ComponentPool<T>>(ecs.m_componentPools[componentGuid]);
       return componentPool->GetComponentData(entityGuid);
     }
 
+    /// @brief Gets the component flags -> DO NOT USE unless for tests / absolutely needed.
+    /// @param entityGuid the GUID of the entity to lookup the component flags for
+    /// @return the component flags
+    ComponentFlags getComponentFlags(Guid entityGuid)
+    {
+      for (auto& entity : entities)
+      {
+        if (entity.guid == entityGuid)
+        {
+          return entity.components;
+        }
+      }
+      return 0;
+    }
+
+    /// @brief Gets the component GUID for the templated component type. Component GUIDs are unique per type. Calling this function with the same type will provide the same result.
+    /// @tparam T the component type
+    /// @return the component GUID corresponding to the type. 
     template <typename T>
     Guid GetComponentGuid()
     {
@@ -241,7 +282,7 @@ namespace ecs
       // if not yet created, add the new component Guid to the lookup table.
       Guid componentGuid = ecs.m_componentCounter++;
       ecs.m_componentGuids[typeName] = componentGuid;
-      ecs.m_componentPools[typeName] = std::make_shared<memory::ComponentPool<T>>();
+      ecs.m_componentPools.push_back(std::make_shared<memory::ComponentPool<T>>()); // setup the component pool.
 
       assert(componentGuid < 63 && "Max number of components exceeded.");
       // TODO make this more robust -> what if we no longer need a particular type of component? make some sort of wrapper that will reuse fully discarded guids
@@ -249,10 +290,10 @@ namespace ecs
       return componentGuid;
     }
 
-    std::vector<Entity> entities; // basically a list of component masks and names
   private:
     // Member variables
-    EntityComponentSystem ecs;
+    EntityComponentSystem ecs{};
+    std::vector<Entity> entities{}; // basically a list of component masks and names
 
     /* --------------------------------------
      Private helper functions
@@ -263,12 +304,13 @@ namespace ecs
     template <typename T>
     void RegisterComponent()
     {
-      std::string typeName = std::string{typeid(T).name()};
-      if (ecs.m_componentPools[typeName] == nullptr)
-      {
-        Guid componentGuid = GetComponentGuid<T>();
-        ecs.m_componentPools.insert({typeName, std::make_shared<memory::ComponentPool<T>>()});
-      }
+      // Guid componentGuid = GetComponentGuid<T>();
+
+      // std::string typeName = std::string{typeid(T).name()};
+      // if (ecs.m_componentPools[componentGuid] == nullptr)
+      // {
+      //   ecs.m_componentPools.push({typeName, std::make_shared<memory::ComponentPool<T>>()});
+      // }
     }
 
   };
@@ -294,8 +336,6 @@ namespace ecs
 
     struct Iterator
     {
-        // need to properly debug whatever is up with this!
-        // also need to fix whatever issue is causing proper components to be made for each entity.
 
       Iterator(EntitiesInScene &entitiesInScene) : m_wrapper(entitiesInScene), m_scene(entitiesInScene.m_scene), m_componentMask(entitiesInScene.m_componentMask), m_all(entitiesInScene.m_all) {}
 

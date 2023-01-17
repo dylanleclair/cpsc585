@@ -374,6 +374,8 @@ void Board::getMoves(std::vector<Move> &moves, const PlayerColor playerToMove, s
         if (includeKing)
             addKingMoves(moves, playerToMove, position);
         break;
+    default:
+        break;
     }
 }
 
